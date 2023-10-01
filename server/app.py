@@ -1,43 +1,78 @@
-#!/usr/bin/env python3
+from flask import Flask, request, jsonify, session, redirect, url_for, abort
+from flask_sqlalchemy import SQLAlchemy
+from config import Config
+from models import db, User
+from flask_bcrypt import Bcrypt
 
-from flask import request, session
-from flask_restful import Resource
+app = Flask(__name__)
+app.config.from_object(Config)
+db.init_app(app)
+bcrypt = Bcrypt(app)
 
-from config import app, db, api
-from models import User
+@app.route('/')
+def home():
+    if 'user_id' in session:
+        return f'Hello, {session["username"]}! <a href="/logout">Logout</a>'
+    return 'Welcome! <a href="/login">Login</a> or <a href="/signup">Signup</a>'
 
-class ClearSession(Resource):
+@app.route('/signup', methods=['POST'])
+def signup():
+    if 'user_id' in session:
+        return jsonify({'message': 'You are already signed in'}), 400
 
-    def delete(self):
-    
-        session['page_views'] = None
-        session['user_id'] = None
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
 
-        return {}, 204
+    if not username or not password:
+        return jsonify({'message': 'Username and password are required'}), 400
 
-class Signup(Resource):
-    
-    def post(self):
-        json = request.get_json()
-        user = User(
-            username=json['username'],
-            password_hash=json['password']
-        )
-        db.session.add(user)
-        db.session.commit()
-        return user.to_dict(), 201
+    existing_user = User.query.filter_by(username=username).first()
 
-class CheckSession(Resource):
-    pass
+    if existing_user:
+        return jsonify({'message': 'Username already exists'}), 400
 
-class Login(Resource):
-    pass
+    new_user = User(username=username)
+    new_user.set_password(password)
 
-class Logout(Resource):
-    pass
+    db.session.add(new_user)
+    db.session.commit()
 
-api.add_resource(ClearSession, '/clear', endpoint='clear')
-api.add_resource(Signup, '/signup', endpoint='signup')
+    session['user_id'] = new_user.id
+    session['username'] = new_user.username
+
+    return jsonify({'message': 'Signup successful', 'user': {'id': new_user.id, 'username': new_user.username}})
+
+@app.route('/login', methods=['POST'])
+def login():
+    if 'user_id' in session:
+        return jsonify({'message': 'You are already signed in'}), 400
+
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return jsonify({'message': 'Username and password are required'}), 400
+
+    user = User.query.filter_by(username=username).first()
+
+    if not user or not user.check_password(password):
+        return jsonify({'message': 'Invalid username or password'}), 401
+
+    session['user_id'] = user.id
+    session['username'] = user.username
+
+    return jsonify({'message': 'Login successful', 'user': {'id': user.id, 'username': user.username}})
+
+@app.route('/logout', methods=['DELETE'])
+def logout():
+    if 'user_id' not in session:
+        return jsonify({'message': 'You are not signed in'}), 401
+
+    session.clear()
+    return jsonify({'message': 'Logout successful'})
 
 if __name__ == '__main__':
-    app.run(port=5555, debug=True)
+    app.run(debug=True)
+
